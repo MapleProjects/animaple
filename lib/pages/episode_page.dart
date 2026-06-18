@@ -116,14 +116,21 @@ class _EpisodePageState extends State<EpisodePage> {
       }
 
       String playUrl;
+      Map<String, String> headers = {};
+
       if (videoType == 'hls') {
         playUrl = videoUrl;
       } else {
-        playUrl = '${ApiService.baseUrl}/api/proxy-video?url=${Uri.encodeComponent(videoUrl)}';
+        // MP4: play directly with Referer header
+        playUrl = videoUrl;
+        headers = {
+          'Referer': 'https://www.mp4upload.com/',
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
+        };
       }
 
       debugPrint('PLAYING: $playUrl');
-      await _player.open(Media(playUrl));
+      await _player.open(Media(playUrl, httpHeaders: headers));
       if (mounted) setState(() => _videoReady = true);
     } catch (e, st) {
       debugPrint('PLAY ERROR: $e\n$st');

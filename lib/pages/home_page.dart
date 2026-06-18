@@ -24,7 +24,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _load() async {
     try {
-      final eps = await ApiService.fetchRecent();
+      final eps = await ApiService.fetchRecentEpisodes();
       setState(() { _episodes = eps; _loading = false; });
     } catch (e) {
       setState(() { _error = e.toString(); _loading = false; });
