@@ -7,9 +7,9 @@ class ApiService {
   static late String baseUrl;
 
   static void init() {
+    // Android emulator: 10.0.2.2, Android physical device: host LAN IP, desktop: localhost
     if (Platform.isAndroid) {
-      // Android emulator uses 10.0.2.2 to reach host localhost
-      baseUrl = 'http://10.0.2.2:3939';
+      baseUrl = 'http://192.168.1.190:3939';
     } else {
       baseUrl = 'http://127.0.0.1:3939';
     }
