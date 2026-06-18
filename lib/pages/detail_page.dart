@@ -23,16 +23,22 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   Future<void> _load() async {
+    while (mounted) {
     try {
       final anime = await ApiService.fetchAnimeDetail(widget.slug);
       final followed = await ApiService.fetchFollowed();
+      if (mounted) {
       setState(() {
         _anime = anime;
         _followed = followed.any((f) => f.animeId == anime.id);
         _loading = false;
       });
+      }
+      return;
     } catch (e) {
-      setState(() => _loading = false);
+      debugPrint('DETAIL RETRY: $e');
+      await Future.delayed(const Duration(seconds: 3));
+    }
     }
   }
 
@@ -49,7 +55,7 @@ class _DetailPageState extends State<DetailPage> {
     }
     final anime = _anime;
     if (anime == null) {
-      return Scaffold(appBar: AppBar(), body: const Center(child: Text('Error cargando anime')));
+      return const Scaffold(body: Center(child: CircularProgressIndicator(color: Color(0xFF8b5cf6))));
     }
 
     return Scaffold(

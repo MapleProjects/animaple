@@ -14,7 +14,6 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   List<RecentEpisode> _episodes = [];
   bool _loading = true;
-  String? _error;
 
   @override
   void initState() {
@@ -23,11 +22,15 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _load() async {
-    try {
-      final eps = await ApiService.fetchRecentEpisodes();
-      setState(() { _episodes = eps; _loading = false; });
-    } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
+    while (mounted) {
+      try {
+        final eps = await ApiService.fetchRecentEpisodes();
+        if (mounted) setState(() { _episodes = eps; _loading = false; });
+        return;
+      } catch (e) {
+        debugPrint('HOME RETRY: $e');
+        await Future.delayed(const Duration(seconds: 3));
+      }
     }
   }
 
@@ -50,9 +53,7 @@ class _HomePageState extends State<HomePage> {
       ),
       body: _loading
         ? const Center(child: CircularProgressIndicator(color: Color(0xFF8b5cf6)))
-        : _error != null
-          ? Center(child: Text(_error!, style: const TextStyle(color: Color(0xFFef4444))))
-          : RefreshIndicator(
+        : RefreshIndicator(
               color: const Color(0xFF8b5cf6),
               onRefresh: _load,
               child: CustomScrollView(

@@ -26,6 +26,7 @@ class _CalendarPageState extends State<CalendarPage> {
   }
 
   Future<void> _load() async {
+    while (mounted) {
     try {
       final sched = await ApiService.fetchSchedule();
       final grouped = <String, List<AnimeBasic>>{};
@@ -48,8 +49,11 @@ class _CalendarPageState extends State<CalendarPage> {
         _selectedDay = todayIdx >= 0 ? todayIdx : 0;
         _loading = false;
       });
+      return;
     } catch (e) {
-      setState(() => _loading = false);
+      debugPrint('CALENDAR RETRY: $e');
+      await Future.delayed(const Duration(seconds: 3));
+    }
     }
   }
 

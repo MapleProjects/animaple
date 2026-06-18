@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart' as http_io;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/anime.dart';
 
@@ -11,6 +12,32 @@ class ApiService {
   static const _ua = 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0';
 
   static SharedPreferences? _prefs;
+
+  // ── HTTP client with timeouts (fixes Android slow/unstable connections) ──
+  static http.Client? _client;
+  static http.Client get _http {
+    if (_client != null) return _client!;
+    final io = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15)
+      ..idleTimeout = const Duration(seconds: 30)
+      ..maxConnectionsPerHost = 6;
+    _client = http_io.IOClient(io);
+    return _client!;
+  }
+
+  /// Retry wrapper for flaky connections (Android/mobile).
+  static Future<T> _retry<T>(Future<T> Function() fn, {int maxAttempts = 3}) async {
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (e) {
+        debugPrint('Attempt $attempt/$maxAttempts failed: $e');
+        if (attempt == maxAttempts) rethrow;
+        await Future.delayed(Duration(seconds: attempt));
+      }
+    }
+    throw StateError('unreachable');
+  }
 
   static Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
@@ -43,13 +70,6 @@ class ApiService {
     if (v is double) return v.toInt();
     if (v is String) return int.tryParse(v) ?? 0;
     return 0;
-  }
-
-  static int? _resolveOptI64(List<dynamic> data, int idx) {
-    final v = _val(data, idx);
-    if (v is int) return v;
-    if (v is double) return v.toInt();
-    return null;
   }
 
   static dynamic _resolveVal(List<dynamic> data, int idx) {
@@ -149,7 +169,8 @@ class ApiService {
   // ── Recent episodes ─────────────────────────────────
 
   static Future<List<RecentEpisode>> fetchRecentEpisodes() async {
-    final resp = await http.get(Uri.parse('$_base/__data.json'), headers: _headers);
+    return _retry(() async {
+    final resp = await _http.get(Uri.parse('$_base/__data.json'), headers: _headers);
     final json = jsonDecode(resp.body) as Map<String, dynamic>;
     final data = _getMainData(json);
     if (data == null) return [];
@@ -213,12 +234,14 @@ class ApiService {
       }
     }
     return episodes;
+    });
   }
 
   // ── Search ──────────────────────────────────────────
 
   static Future<List<AnimeBasic>> search(String query) async {
-    final resp = await http.get(
+    return _retry(() async {
+    final resp = await _http.get(
       Uri.parse('$_base/catalogo/__data.json').replace(queryParameters: {'search': query}),
       headers: _headers,
     );
@@ -236,12 +259,14 @@ class ApiService {
     if (indices == null) return [];
 
     return _resolveAnimeList(data, indices);
+    });
   }
 
   // ── Schedule ────────────────────────────────────────
 
   static Future<List<AnimeBasic>> fetchSchedule() async {
-    final resp = await http.get(Uri.parse('$_base/horario/__data.json'), headers: _headers);
+    return _retry(() async {
+    final resp = await _http.get(Uri.parse('$_base/horario/__data.json'), headers: _headers);
     final json = jsonDecode(resp.body) as Map<String, dynamic>;
     final nodes = json['nodes'] as List? ?? [];
 
@@ -265,12 +290,14 @@ class ApiService {
       if (allAnimes.isNotEmpty) return allAnimes;
     }
     return [];
+    });
   }
 
   // ── Anime detail ────────────────────────────────────
 
   static Future<AnimeDetail> fetchAnimeDetail(String slug) async {
-    final resp = await http.get(Uri.parse('$_base/media/$slug/__data.json'), headers: _headers);
+    return _retry(() async {
+    final resp = await _http.get(Uri.parse('$_base/media/$slug/__data.json'), headers: _headers);
     final json = jsonDecode(resp.body) as Map<String, dynamic>;
     final data = _getMainData(json);
     if (data == null) throw Exception('No data');
@@ -313,12 +340,14 @@ class ApiService {
       episodesCount: episodes.length, slug: slugVal,
       episodes: episodes, mature: false,
     );
+    });
   }
 
   // ── Episode detail ──────────────────────────────────
 
   static Future<EpisodeDetail> fetchEpisodeDetail(String animeSlug, int episodeNumber) async {
-    final resp = await http.get(
+    return _retry(() async {
+    final resp = await _http.get(
       Uri.parse('$_base/media/$animeSlug/$episodeNumber/__data.json'),
       headers: _headers,
     );
@@ -399,11 +428,13 @@ class ApiService {
       id: episodeId, mediaId: mediaId, number: number,
       variants: variants, embeds: embeds, filler: false, downloads: [],
     );
+    });
   }
 
   // ── Video URL extraction ────────────────────────────
 
   static Future<Map<String, dynamic>> fetchVideoUrl(String embedUrl) async {
+    return _retry(() async {
     // HLS (zilla-networks)
     if (embedUrl.contains('zilla-networks.com/play/')) {
       final id = embedUrl.split('/').last;
@@ -415,7 +446,7 @@ class ApiService {
     // MP4Upload — extract direct .mp4 URL
     if (embedUrl.contains('mp4upload.com')) {
       try {
-        final resp = await http.get(Uri.parse(embedUrl), headers: _headers);
+        final resp = await _http.get(Uri.parse(embedUrl), headers: _headers);
         final body = resp.body;
         // Pattern: src: "https://a*.mp4upload.com:*/d/*/video.mp4"
         final match = RegExp(r'src:\s*"(https://[^"]*\.mp4)"').firstMatch(body);
@@ -433,6 +464,7 @@ class ApiService {
     }
 
     return {'url': embedUrl, 'type': 'embed'};
+    });
   }
 
   // ── History (local) ─────────────────────────────────

@@ -26,7 +26,7 @@ class _EpisodePageState extends State<EpisodePage> {
   AnimeDetail? _animeDetail;
   bool _loading = true;
   bool _videoReady = false;
-  bool _videoError = false;
+
   String? _activeServer;
   String _activeVariant = 'DUB';
   bool _isFullscreen = false;
@@ -49,7 +49,7 @@ class _EpisodePageState extends State<EpisodePage> {
     });
     _player.stream.error.listen((err) {
       debugPrint('MEDIA_KIT ERROR: $err');
-      if (mounted && err.isNotEmpty) setState(() => _videoError = true);
+      if (mounted && err.isNotEmpty) debugPrint('MEDIA_KIT STREAM ERROR: $err');
     });
     _load();
   }
@@ -65,10 +65,12 @@ class _EpisodePageState extends State<EpisodePage> {
   }
 
   Future<void> _load() async {
+    while (mounted) {
     try {
       final ep = await ApiService.fetchEpisodeDetail(widget.animeSlug, widget.episodeNumber);
       AnimeDetail? detail;
       try { detail = await ApiService.fetchAnimeDetail(widget.animeSlug); } catch (_) {}
+      if (mounted) {
       setState(() {
         _episode = ep;
         _animeDetail = detail;
@@ -76,6 +78,7 @@ class _EpisodePageState extends State<EpisodePage> {
         _autoPlayedNext = false;
         _activeVariant = ep.variants.contains('DUB') ? 'DUB' : (ep.variants.isNotEmpty ? ep.variants.first : 'DUB');
       });
+      }
       // Register in history
       ApiService.addHistory(
         detail?.id ?? 0,
@@ -84,9 +87,11 @@ class _EpisodePageState extends State<EpisodePage> {
         ep.number,
       );
       _autoPlay();
+      return;
     } catch (e) {
-      debugPrint('LOAD ERROR: $e');
-      setState(() => _loading = false);
+      debugPrint('EPISODE LOAD RETRY: $e');
+      await Future.delayed(const Duration(seconds: 3));
+    }
     }
   }
 
@@ -94,60 +99,56 @@ class _EpisodePageState extends State<EpisodePage> {
     final ep = _episode;
     if (ep == null) return;
     final filtered = ep.embeds.where((s) => s.variant == _activeVariant).toList();
+    // Only HLS and MP4Upload — ignore other servers
     final hls = filtered.where((s) => s.server.toLowerCase().contains('hls')).toList();
     if (hls.isNotEmpty) { _playServer(hls.first); return; }
-    final mp4 = filtered.where((s) => s.server.toLowerCase().contains('mp4')).toList();
+    final mp4 = filtered.where((s) => s.server.toLowerCase().contains('mp4upload')).toList();
     if (mp4.isNotEmpty) { _playServer(mp4.first); return; }
-    if (filtered.isNotEmpty) { _playServer(filtered.first); }
   }
 
   Future<void> _playServer(ServerMirror server) async {
-    setState(() { _videoReady = false; _videoError = false; _activeServer = server.server; _autoPlayedNext = false; });
+    if (mounted) setState(() { _videoReady = false; _activeServer = server.server; _autoPlayedNext = false; });
 
-    try {
-      debugPrint('PLAY SERVER: ${server.server} → ${server.url}');
-      final data = await ApiService.fetchVideoUrl(server.url);
-      final videoUrl = data['url'] as String?;
-      final videoType = data['type'] as String? ?? 'mp4';
+    while (mounted) {
+      try {
+        debugPrint('PLAY SERVER: ${server.server} → ${server.url}');
+        final data = await ApiService.fetchVideoUrl(server.url);
+        final videoUrl = data['url'] as String?;
+        final videoType = data['type'] as String? ?? 'mp4';
 
-      if (videoUrl == null || videoUrl.isEmpty) {
-        setState(() => _videoError = true);
+        if (videoUrl == null || videoUrl.isEmpty) {
+          await Future.delayed(const Duration(seconds: 3));
+          continue;
+        }
+
+        String playUrl;
+        Map<String, String> headers = {};
+
+        if (videoType == 'hls') {
+          playUrl = videoUrl;
+        } else {
+          // MP4: play directly with Referer header
+          playUrl = videoUrl;
+          headers = {
+            'Referer': 'https://www.mp4upload.com/',
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
+          };
+        }
+
+        debugPrint('PLAYING: $playUrl');
+        await _player.open(Media(playUrl, httpHeaders: headers));
+        // Force start from 0 — HLS segments may have non-zero PTS
+        await _player.seek(Duration.zero);
+        if (mounted) setState(() => _videoReady = true);
         return;
+      } catch (e) {
+        debugPrint('PLAY RETRY: $e');
+        await Future.delayed(const Duration(seconds: 3));
       }
-
-      String playUrl;
-      Map<String, String> headers = {};
-
-      if (videoType == 'hls') {
-        playUrl = videoUrl;
-      } else {
-        // MP4: play directly with Referer header
-        playUrl = videoUrl;
-        headers = {
-          'Referer': 'https://www.mp4upload.com/',
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
-        };
-      }
-
-      debugPrint('PLAYING: $playUrl');
-      await _player.open(Media(playUrl, httpHeaders: headers));
-      if (mounted) setState(() => _videoReady = true);
-    } catch (e, st) {
-      debugPrint('PLAY ERROR: $e\n$st');
-      if (mounted) setState(() => _videoError = true);
     }
   }
 
-  void _retry() {
-    final ep = _episode;
-    if (ep == null) return;
-    final currentServer = _activeServer;
-    if (currentServer != null) {
-      final server = ep.embeds.where((s) => s.server == currentServer && s.variant == _activeVariant).firstOrNull;
-      if (server != null) { _playServer(server); return; }
-    }
-    _autoPlay();
-  }
+
 
   void _goNext() {
     final detail = _animeDetail;
@@ -191,7 +192,7 @@ class _EpisodePageState extends State<EpisodePage> {
 
     final filteredEmbeds = ep.embeds.where((s) =>
       s.variant == _activeVariant &&
-      (s.server.toLowerCase().contains('hls') || s.server.toLowerCase().contains('mp4'))
+      (s.server.toLowerCase().contains('hls') || s.server.toLowerCase().contains('mp4upload'))
     ).toList();
     final anime = _animeDetail;
     final screenWidth = MediaQuery.of(context).size.width;
@@ -269,24 +270,7 @@ class _EpisodePageState extends State<EpisodePage> {
       color: Colors.black,
       child: _videoReady
         ? Video(controller: _controller)
-        : _videoError
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.error_outline, color: Color(0xFFef4444), size: 40),
-                  const SizedBox(height: 8),
-                  const Text('Error cargando video', style: TextStyle(color: Color(0xFFef4444))),
-                  const SizedBox(height: 12),
-                  ElevatedButton(
-                    onPressed: _retry,
-                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF8b5cf6)),
-                    child: const Text('Reintentar', style: TextStyle(color: Colors.white)),
-                  ),
-                ],
-              ),
-            )
-          : const Center(child: CircularProgressIndicator(color: Color(0xFF8b5cf6))),
+        : const Center(child: CircularProgressIndicator(color: Color(0xFF8b5cf6))),
     );
   }
 
@@ -356,7 +340,7 @@ class _EpisodePageState extends State<EpisodePage> {
                     child: ChoiceChip(
                       label: Text(label),
                       selected: isActive,
-                      onSelected: (_) { setState(() => _activeVariant = v); _retry(); },
+                      onSelected: (_) { setState(() => _activeVariant = v); _autoPlay(); },
                       selectedColor: const Color(0xFF8b5cf6),
                       backgroundColor: const Color(0xFF110e1a),
                       labelStyle: TextStyle(color: isActive ? Colors.white : const Color(0xFFa99fc0), fontWeight: FontWeight.w600, fontSize: 13),
